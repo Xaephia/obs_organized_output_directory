@@ -13,13 +13,19 @@ local name_source_enum = {
     ["Process Name"] = 1
 }
 
+local process_blacklist = {
+    ["steamwebhelper.exe"] = 1
+}
+
 local DEFAULT_SCREENSHOT_SUB_DIR = "screenshots"
 local DEFAULT_REPLAY_SUB_DIR = "replays"
 local DEFAULT_NAME_SOURCE = name_source_enum["Window Title"]
+local DEFAULT_MATCH_STRING = ""
 
 local cfg_screenshot_sub_dir
 local cfg_replay_sub_dir
 local cfg_name_source
+local cfg_match_string
 
 local obs = obslua
 
@@ -39,11 +45,14 @@ end
 
 function script_properties()
     local props = obs.obs_properties_create()
-
+        -- directory input fields
     obs.obs_properties_add_text(props, "SCREENSHOT_SUB_DIR", "Screenshot directory name", obs.OBS_TEXT_DEFAULT)
     obs.obs_properties_add_text(props, "REPLAY_SUB_DIR", "Replay directory name", obs.OBS_TEXT_DEFAULT)
-
+        -- title combobox
     local props_name_source = obs.obs_properties_add_list(props, "NAME_SOURCE", "Name source", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_INT)
+        -- match input field
+    obs.obs_properties_add_text(props, "MATCH_STRING", "Title filter (lua match syntax)", obs.OBS_TEXT_DEFAULT)
+        -- add options to comboboxes
     for name, value in pairs(name_source_enum) do
         obs.obs_property_list_add_int(props_name_source, name, value)
     end
@@ -56,6 +65,7 @@ function script_update(settings)
 
     cfg_screenshot_sub_dir = obs.obs_data_get_string(settings, "SCREENSHOT_SUB_DIR")
     cfg_replay_sub_dir = obs.obs_data_get_string(settings, "REPLAY_SUB_DIR")
+    cfg_match_string = obs.obs_data_get_string(settings, "MATCH_STRING")
     cfg_name_source = obs.obs_data_get_int(settings, "NAME_SOURCE")
 end
 
@@ -64,6 +74,7 @@ function script_defaults(settings)
 
     obs.obs_data_set_default_string(settings, "SCREENSHOT_SUB_DIR", DEFAULT_SCREENSHOT_SUB_DIR)
     obs.obs_data_set_default_string(settings, "REPLAY_SUB_DIR", DEFAULT_REPLAY_SUB_DIR)
+    obs.obs_data_set_default_string(settings, "MATCH_STRING", DEFAULT_MATCH_STRING)
     obs.obs_data_set_default_int(settings, "NAME_SOURCE", DEFAULT_NAME_SOURCE)
 end
 
@@ -97,11 +108,14 @@ local function search_for_capture_source_and_get_data()
     for _, source in ipairs(sources) do
         if obs.obs_source_active(source) then
             local tmp_process_name, tmp_window_title, tmp_hooked = get_source_hook_infos(source)
+
+            if process_blacklist[tmp_process_name] ~= nil then goto continue end -- checks if the process name is in the list of excluded processes
     
             if tmp_hooked then
                 process_name = tmp_process_name
                 window_name = tmp_window_title
             end
+            ::continue::        
         end
     end
 
@@ -112,6 +126,7 @@ local function get_game_name()
     print("get_game_name()")
 
     local executable, title = search_for_capture_source_and_get_data()
+    local match = nil
 
     if executable ~= nil then
         print("\tExecutable: " .. executable)
@@ -122,9 +137,16 @@ local function get_game_name()
 
     if cfg_name_source == name_source_enum["Process Name"] then
         return executable
+    elseif (title ~= nil and cfg_name_source == name_source_enum["Window Title"]) then
+        if #cfg_match_string ~= 0 then                      -- if there is anything in the match setting,
+            match = string.match(title, cfg_match_string)   -- perform string.match on title
+            print("\tMatched title: " .. match)             -- and log the matched string,
+            return match                                    -- then return the match instead
+        else
+            return title                                    -- otherwise just return the regular title
+        end
     end
-
-    return title
+    return nil
 end
 
 local function move_file(src, dst)
@@ -135,7 +157,7 @@ local function move_file(src, dst)
     if not obs.os_file_exists(dst) then
         obs.os_rename(src, dst)
     else
-        print("File aready exist at the destination! So we don't move the file!")
+        print("File aready exists at the destination! So we don't move the file!")
     end
 end
 
